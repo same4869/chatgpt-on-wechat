@@ -9,21 +9,40 @@ import json
 import os
 import threading
 import time
+
 import requests
 
 from bridge.context import *
 from bridge.reply import *
 from channel.chat_channel import ChatChannel
 from channel import chat_channel
+from channel.s_uitls.message_buffer_util import MessageBuffer
 from channel.wechat.wechat_message import *
 from common.expired_dict import ExpiredDict
 from common.log import logger
 from common.singleton import singleton
 from common.time_check import time_checker
-from common.utils import convert_webp_to_png
 from config import conf, get_appdata_dir
 from lib import itchat
 from lib.itchat.content import *
+
+# 实例化MessageBuffer为一个全局变量
+global_buffer = MessageBuffer(max_delay=10)
+
+    # 使用示例
+def content_ready_callback(type, uid, content, cmsg):
+    logger.debug(f"--------->>>>>>>>>>Content ready: {content}")
+
+    wcc = WechatChannel()
+
+    context = wcc._compose_context(cmsg.ctype, content, isgroup=False, msg=cmsg)
+    if context:
+        wcc.produce(context)
+
+# 接下来您可以在main.py文件中的任何地方使用global_buffer
+# 例如，在某个函数中使用它
+def add_message(type, uid, content, cmsg):
+    global_buffer.add_content(type, uid, content, cmsg, callback=content_ready_callback)
 
 
 @itchat.msg_register([TEXT, VOICE, PICTURE, NOTE, ATTACHMENT, SHARING])
@@ -109,7 +128,7 @@ class WechatChannel(ChatChannel):
 
     def __init__(self):
         super().__init__()
-        self.receivedMsgs = ExpiredDict(conf().get("expires_in_seconds", 3600))
+        self.receivedMsgs = ExpiredDict(conf().get("expires_in_seconds"))
         self.auto_login_times = 0
 
     def startup(self):
@@ -151,6 +170,7 @@ class WechatChannel(ChatChannel):
         logger.debug("Login success")
         _send_login_success()
 
+
     # handle_* 系列函数处理收到的消息后构造Context，然后传入produce函数中处理Context和发送回复
     # Context包含了消息的所有信息，包括以下属性
     #   type 消息类型, 包括TEXT、VOICE、IMAGE_CREATE
@@ -165,6 +185,7 @@ class WechatChannel(ChatChannel):
     @time_checker
     @_check
     def handle_single(self, cmsg: ChatMessage):
+
         # filter system message
         if cmsg.other_user_id in ["weixin"]:
             return
@@ -180,9 +201,15 @@ class WechatChannel(ChatChannel):
             logger.debug("[WX]receive text msg: {}, cmsg={}".format(json.dumps(cmsg._rawmsg, ensure_ascii=False), cmsg))
         else:
             logger.debug("[WX]receive msg: {}, cmsg={}".format(cmsg.content, cmsg))
-        context = self._compose_context(cmsg.ctype, cmsg.content, isgroup=False, msg=cmsg)
-        if context:
-            self.produce(context)
+
+        if conf().get("delay_merge_msg") == True:  # 是否延迟回复，并在延迟时间内合并对方发过来的所有消息
+            add_message(cmsg.ctype, cmsg.from_user_id, cmsg.content, cmsg)
+        else:
+            context = self._compose_context(cmsg.ctype, cmsg.content, isgroup=False, msg=cmsg)
+            if context:
+                self.produce(context)
+
+
 
     @time_checker
     @_check
@@ -206,11 +233,29 @@ class WechatChannel(ChatChannel):
         if context:
             self.produce(context)
 
+    def send_reply_with_delay(self, reply, receiver):
+        # 检查reply.content是否存在空白整行
+        if reply.content.strip() == "":
+            print("No content to send.")
+            return
+
+        # 将内容按空白整行分割成数组
+        content_lines = reply.content.split('\n')
+        content_lines = [line for line in content_lines if line.strip() != ""]  # 移除空行
+
+        # 遍历数组，发送每行内容
+        for line in content_lines:
+            time.sleep(3)  # 在发送之前等待3秒
+            itchat.send(line, toUserName=receiver)
+
     # 统一的发送函数，每个Channel自行实现，根据reply的type字段发送不同类型的消息
     def send(self, reply: Reply, context: Context):
         receiver = context["receiver"]
         if reply.type == ReplyType.TEXT:
-            itchat.send(reply.content, toUserName=receiver)
+            if conf().get("split_reply_msg") == True:
+                self.send_reply_with_delay(reply, receiver)
+            else:
+                itchat.send(reply.content, toUserName=receiver)
             logger.info("[WX] sendMsg={}, receiver={}".format(reply, receiver))
         elif reply.type == ReplyType.ERROR or reply.type == ReplyType.INFO:
             itchat.send(reply.content, toUserName=receiver)
@@ -229,12 +274,6 @@ class WechatChannel(ChatChannel):
                 image_storage.write(block)
             logger.info(f"[WX] download image success, size={size}, img_url={img_url}")
             image_storage.seek(0)
-            if ".webp" in img_url:
-                try:
-                    image_storage = convert_webp_to_png(image_storage)
-                except Exception as e:
-                    logger.error(f"Failed to convert image: {e}")
-                    return
             itchat.send_image(image_storage, toUserName=receiver)
             logger.info("[WX] sendImage url={}, receiver={}".format(img_url, receiver))
         elif reply.type == ReplyType.IMAGE:  # 从文件读取图片
@@ -272,7 +311,6 @@ def _send_login_success():
     except Exception as e:
         pass
 
-
 def _send_logout():
     try:
         from common.linkai_client import chat_client
@@ -281,7 +319,6 @@ def _send_logout():
     except Exception as e:
         pass
 
-
 def _send_qr_code(qrcode_list: list):
     try:
         from common.linkai_client import chat_client
@@ -289,4 +326,3 @@ def _send_qr_code(qrcode_list: list):
             chat_client.send_qrcode(qrcode_list)
     except Exception as e:
         pass
-
