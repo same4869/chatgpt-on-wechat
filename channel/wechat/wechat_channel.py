@@ -7,6 +7,7 @@ wechat channel
 import io
 import json
 import os
+import random
 import threading
 import time
 
@@ -236,7 +237,7 @@ class WechatChannel(ChatChannel):
     def send_reply_with_delay(self, reply, receiver):
         # 检查reply.content是否存在空白整行
         if reply.content.strip() == "":
-            print("No content to send.")
+            logger.debug("No content to send.")
             return
 
         # 将内容按空白整行分割成数组
@@ -246,7 +247,71 @@ class WechatChannel(ChatChannel):
         # 遍历数组，发送每行内容
         for line in content_lines:
             time.sleep(3)  # 在发送之前等待3秒
-            itchat.send(line, toUserName=receiver)
+
+            if conf().get("use_emoji") == True:
+                self.send_with_image(line, receiver)
+            else:
+                itchat.send(line, toUserName=receiver)
+
+            # self.send_with_image(line, receiver)
+            #itchat.send(line, toUserName=receiver)
+
+    def find_closest_image(slef, num):
+        num = int(num)
+        image_folder = './biaoqingbao'
+        closest_diff = 100
+        closest_image = None
+
+        if os.path.exists(image_folder):
+            for file in os.listdir(image_folder):
+                # 提取文件名中的数字部分，忽略扩展名
+                file_number = re.match(r'^(\d+)', file)
+                if file_number:
+                    file_num = int(file_number.group(1))
+                    diff = abs(num - file_num)
+                    if diff < closest_diff:
+                        closest_diff = diff
+                        closest_image = os.path.join(image_folder, file)
+        else:
+            print(f"日志：图片文件夹 {image_folder} 不存在。")
+        
+        return closest_image
+    
+    def send_with_image(self, content, receiver):
+        """
+        包装itchat.send方法，如果reply.content结尾是{空格 数字}格式，则发送对应的图片。
+        """
+        # 打印当前运行时目录
+        logger.debug(f"日志：当前运行时目录是 {os.getcwd()}")
+
+        # 检查content的最后是否包含空格后跟数字
+        match = re.search(r'\s(\d{1,3})$', content)
+        if match:
+            # 如果是，截取掉数字和后面的空格
+            modified_content = content[:match.start()]
+        else:
+            # 否则使用原始的content
+            modified_content = content
+        
+        # 正则表达式匹配结尾的空格和数字
+        match = re.search(r'\s(\d{1,3})$', content)
+        if match:
+            num = match.group(1)
+            if 1 <= int(num) <= 100:
+                image_path = self.find_closest_image(num)
+                if image_path:
+                    logger.debug(f"日志：找到与数字{num}最接近的图片路径：{image_path}")
+                    itchat.send(modified_content, toUserName=receiver)
+                    if random.randint(1, 100) <= conf().get("emoji_probability"):
+                        itchat.send_image(image_path, toUserName=receiver)
+                else:
+                    logger.debug(f"日志：没有找到与数字{num}最接近的图片。")
+            else:
+                logger.debug(f"日志：数字{num}不在1到100的范围内，发送文本内容。")
+                itchat.send(content, toUserName=receiver)
+        else:
+            logger.debug(f"日志：没有匹配到数字，发送文本内容。")
+            itchat.send(content, toUserName=receiver)
 
     # 统一的发送函数，每个Channel自行实现，根据reply的type字段发送不同类型的消息
     def send(self, reply: Reply, context: Context):
@@ -255,7 +320,10 @@ class WechatChannel(ChatChannel):
             if conf().get("split_reply_msg") == True:
                 self.send_reply_with_delay(reply, receiver)
             else:
-                itchat.send(reply.content, toUserName=receiver)
+                if conf().get("use_emoji") == True:
+                    self.send_with_image(reply.content, receiver)
+                else:
+                    itchat.send(reply.content, toUserName=receiver)
             logger.info("[WX] sendMsg={}, receiver={}".format(reply, receiver))
         elif reply.type == ReplyType.ERROR or reply.type == ReplyType.INFO:
             itchat.send(reply.content, toUserName=receiver)

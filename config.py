@@ -179,7 +179,9 @@ available_setting = {
     "Minimax_base_url": "",
     "delay_merge_msg": False,
     "delay_msg_time": 0,
-    "split_reply_msg": False
+    "split_reply_msg": False,
+    "use_emoji": True,
+    "emoji_probability": 0
 }
 
 
