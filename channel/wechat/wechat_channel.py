@@ -302,7 +302,11 @@ class WechatChannel(ChatChannel):
                 if image_path:
                     logger.debug(f"日志：找到与数字{num}最接近的图片路径：{image_path}")
                     itchat.send(modified_content, toUserName=receiver)
-                    if random.randint(1, 100) <= conf().get("emoji_probability"):
+
+                    emojiRandomNum = random.randint(1, 100)
+                    logger.debug(f"emojiRandomNum:{emojiRandomNum} ---- emoji_probability：{conf().get("emoji_probability")}")
+
+                    if emojiRandomNum <= conf().get("emoji_probability"):
                         itchat.send_image(image_path, toUserName=receiver)
                 else:
                     logger.debug(f"日志：没有找到与数字{num}最接近的图片。")
